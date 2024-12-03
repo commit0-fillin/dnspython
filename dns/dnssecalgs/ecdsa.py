@@ -15,7 +15,10 @@ class PublicECDSA(CryptographyPublicKey):
 
     def encode_key_bytes(self) -> bytes:
         """Encode a public key per RFC 6605, section 4."""
-        pass
+        public_numbers = self.key.public_numbers()
+        x = public_numbers.x.to_bytes(self.octets, byteorder='big')
+        y = public_numbers.y.to_bytes(self.octets, byteorder='big')
+        return x + y
 
 class PrivateECDSA(CryptographyPrivateKey):
     key: ec.EllipticCurvePrivateKey
@@ -24,7 +27,26 @@ class PrivateECDSA(CryptographyPrivateKey):
 
     def sign(self, data: bytes, verify: bool=False) -> bytes:
         """Sign using a private key per RFC 6605, section 4."""
-        pass
+        signature = self.key.sign(
+            data,
+            ec.ECDSA(self.public_cls.chosen_hash)
+        )
+        r, s = utils.decode_dss_signature(signature)
+        r_bytes = r.to_bytes(self.public_cls.octets, byteorder='big')
+        s_bytes = s.to_bytes(self.public_cls.octets, byteorder='big')
+        
+        if verify:
+            public_key = self.key.public_key()
+            try:
+                public_key.verify(
+                    signature,
+                    data,
+                    ec.ECDSA(self.public_cls.chosen_hash)
+                )
+            except Exception:
+                raise ValueError("Signature verification failed")
+        
+        return r_bytes + s_bytes
 
 class PublicECDSAP256SHA256(PublicECDSA):
     algorithm = Algorithm.ECDSAP256SHA256

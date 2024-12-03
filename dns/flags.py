@@ -20,7 +20,13 @@ def from_text(text: str) -> int:
 
     Returns an ``int``
     """
-    pass
+    flags = 0
+    for flag_text in text.split():
+        try:
+            flags |= Flag[flag_text.upper()]
+        except KeyError:
+            raise ValueError(f"Unknown flag: {flag_text}")
+    return flags
 
 def to_text(flags: int) -> str:
     """Convert a flags value into a space-separated list of flag text
@@ -28,7 +34,7 @@ def to_text(flags: int) -> str:
 
     Returns a ``str``.
     """
-    pass
+    return ' '.join(flag.name for flag in Flag if flags & flag)
 
 def edns_from_text(text: str) -> int:
     """Convert a space-separated list of EDNS flag text values into a EDNS
@@ -36,7 +42,13 @@ def edns_from_text(text: str) -> int:
 
     Returns an ``int``
     """
-    pass
+    flags = 0
+    for flag_text in text.split():
+        try:
+            flags |= EDNSFlag[flag_text.upper()]
+        except KeyError:
+            raise ValueError(f"Unknown EDNS flag: {flag_text}")
+    return flags
 
 def edns_to_text(flags: int) -> str:
     """Convert an EDNS flags value into a space-separated list of EDNS flag
@@ -44,7 +56,7 @@ def edns_to_text(flags: int) -> str:
 
     Returns a ``str``.
     """
-    pass
+    return ' '.join(flag.name for flag in EDNSFlag if flags & flag)
 QR = Flag.QR
 AA = Flag.AA
 TC = Flag.TC

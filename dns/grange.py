@@ -10,4 +10,25 @@ def from_text(text: str) -> Tuple[int, int, int]:
 
     Returns a tuple of three ``int`` values ``(start, stop, step)``.
     """
-    pass
+    parts = text.split('/')
+    if len(parts) == 1:
+        range_part = parts[0]
+        step = 1
+    elif len(parts) == 2:
+        range_part, step = parts
+        step = int(step)
+    else:
+        raise dns.exception.SyntaxError("invalid range")
+
+    range_values = range_part.split('-')
+    if len(range_values) == 2:
+        start, stop = map(int, range_values)
+    else:
+        raise dns.exception.SyntaxError("invalid range")
+
+    if start > stop:
+        raise dns.exception.SyntaxError("start must be <= stop")
+    if step <= 0:
+        raise dns.exception.SyntaxError("step must be positive")
+
+    return (start, stop, step)

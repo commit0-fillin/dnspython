@@ -108,7 +108,21 @@ def from_text(text: str) -> RdataType:
 
     Returns a ``dns.rdatatype.RdataType``.
     """
-    pass
+    text = text.upper()
+    try:
+        return RdataType[text]
+    except KeyError:
+        if text.startswith('TYPE'):
+            try:
+                value = int(text[4:])
+                if 0 <= value <= 65535:
+                    return RdataType(value)
+                else:
+                    raise ValueError("Rdata type value must be between 0 and 65535")
+            except ValueError:
+                raise UnknownRdatatype(f"Unknown rdatatype {text}")
+        else:
+            raise UnknownRdatatype(f"Unknown rdatatype {text}")
 
 def to_text(value: RdataType) -> str:
     """Convert a DNS rdata type value to text.
@@ -120,7 +134,13 @@ def to_text(value: RdataType) -> str:
 
     Returns a ``str``.
     """
-    pass
+    if not isinstance(value, int) or value < 0 or value > 65535:
+        raise ValueError("Rdata type value must be between 0 and 65535")
+    
+    try:
+        return RdataType(value).name
+    except ValueError:
+        return f'TYPE{value}'
 
 def is_metatype(rdtype: RdataType) -> bool:
     """True if the specified type is a metatype.
@@ -132,7 +152,7 @@ def is_metatype(rdtype: RdataType) -> bool:
 
     Returns a ``bool``.
     """
-    pass
+    return rdtype in _metatypes
 
 def is_singleton(rdtype: RdataType) -> bool:
     """Is the specified type a singleton type?
@@ -147,7 +167,7 @@ def is_singleton(rdtype: RdataType) -> bool:
 
     Returns a ``bool``.
     """
-    pass
+    return rdtype in _singletons
 
 def register_type(rdtype: RdataType, rdtype_text: str, is_singleton: bool=False) -> None:
     """Dynamically register an rdatatype.
@@ -159,7 +179,25 @@ def register_type(rdtype: RdataType, rdtype_text: str, is_singleton: bool=False)
     *is_singleton*, a ``bool``, indicating if the type is a singleton (i.e.
     RRsets of the type can have only one member.)
     """
-    pass
+    if not isinstance(rdtype, int) or rdtype < 0 or rdtype > 65535:
+        raise ValueError("Rdata type value must be between 0 and 65535")
+    
+    if not isinstance(rdtype_text, str) or not rdtype_text:
+        raise ValueError("Rdata type text must be a non-empty string")
+    
+    rdtype_text = rdtype_text.upper()
+    
+    if rdtype_text in _registered_by_text:
+        raise ValueError(f"Rdata type text '{rdtype_text}' already registered")
+    
+    if rdtype in _registered_by_value:
+        raise ValueError(f"Rdata type value {rdtype} already registered")
+    
+    _registered_by_text[rdtype_text] = RdataType(rdtype)
+    _registered_by_value[RdataType(rdtype)] = rdtype_text
+    
+    if is_singleton:
+        _singletons.add(RdataType(rdtype))
 TYPE0 = RdataType.TYPE0
 NONE = RdataType.NONE
 A = RdataType.A

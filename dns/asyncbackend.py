@@ -16,7 +16,16 @@ def get_backend(name: str) -> Backend:
 
     Raises NotImplementedError if an unknown backend name is specified.
     """
-    pass
+    if name not in _backends:
+        if name == 'trio':
+            from dns._trio_backend import Backend as TrioBackend
+            _backends['trio'] = TrioBackend()
+        elif name == 'asyncio':
+            from dns._asyncio_backend import Backend as AsyncioBackend
+            _backends['asyncio'] = AsyncioBackend()
+        else:
+            raise NotImplementedError(f'Unknown backend "{name}"')
+    return _backends[name]
 
 def sniff() -> str:
     """Attempt to determine the in-use asynchronous I/O library by using
@@ -25,11 +34,31 @@ def sniff() -> str:
     Returns the name of the library, or raises AsyncLibraryNotFoundError
     if the library cannot be determined.
     """
-    pass
+    global _no_sniffio
+    if not _no_sniffio:
+        try:
+            import sniffio
+            library = sniffio.current_async_library()
+            if library == 'trio':
+                return 'trio'
+            elif library == 'asyncio':
+                return 'asyncio'
+        except ImportError:
+            _no_sniffio = True
+        except sniffio.AsyncLibraryNotFoundError:
+            pass
+    raise AsyncLibraryNotFoundError('Unable to determine async library')
 
 def get_default_backend() -> Backend:
     """Get the default backend, initializing it if necessary."""
-    pass
+    global _default_backend
+    if _default_backend is None:
+        try:
+            name = sniff()
+        except AsyncLibraryNotFoundError:
+            name = 'asyncio'
+        _default_backend = get_backend(name)
+    return _default_backend
 
 def set_default_backend(name: str) -> Backend:
     """Set the default backend.
@@ -40,4 +69,6 @@ def set_default_backend(name: str) -> Backend:
     in testing situations, this function allows the backend to be set
     explicitly.
     """
-    pass
+    global _default_backend
+    _default_backend = get_backend(name)
+    return _default_backend

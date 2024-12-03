@@ -59,4 +59,5 @@ else:
     _HTTPTransport = dns._asyncbackend.NullTransport
 
 class Backend(dns._asyncbackend.Backend):
-    pass
+    def __init__(self):
+        super().__init__()

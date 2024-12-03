@@ -53,4 +53,12 @@ class NameDict(MutableMapping):
         Returns a ``(key, value)`` where *key* is the deepest
         ``dns.name.Name``, and *value* is the value associated with *key*.
         """
-        pass
+        if not isinstance(name, dns.name.Name):
+            raise ValueError('Name must be a dns.name.Name object')
+
+        for i in range(len(name), -1, -1):
+            n = name[:i]
+            if n in self.__store:
+                return (n, self.__store[n])
+
+        return (dns.name.empty, None)

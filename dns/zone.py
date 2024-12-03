@@ -140,7 +140,19 @@ class Zone(dns.transaction.TransactionManager):
 
         Returns a ``dns.node.Node``.
         """
-        pass
+        if isinstance(name, str):
+            name = dns.name.from_text(name, self.origin)
+        if self.relativize:
+            name = name.relativize(self.origin)
+        if not name.is_subdomain(self.origin):
+            raise KeyError("name is not a subdomain of the zone origin")
+        node = self.nodes.get(name)
+        if node is None and create:
+            node = self.node_factory()
+            self.nodes[name] = node
+        elif node is None:
+            raise KeyError("node '%s' does not exist" % name)
+        return node
 
     def get_node(self, name: Union[dns.name.Name, str], create: bool=False) -> Optional[dns.node.Node]:
         """Get a node in the zone, possibly creating it.
@@ -159,7 +171,10 @@ class Zone(dns.transaction.TransactionManager):
 
         Returns a ``dns.node.Node`` or ``None``.
         """
-        pass
+        try:
+            return self.find_node(name, create)
+        except KeyError:
+            return None
 
     def delete_node(self, name: Union[dns.name.Name, str]) -> None:
         """Delete the specified node if it exists.
@@ -171,7 +186,12 @@ class Zone(dns.transaction.TransactionManager):
 
         It is not an error if the node does not exist.
         """
-        pass
+        if isinstance(name, str):
+            name = dns.name.from_text(name, self.origin)
+        if self.relativize:
+            name = name.relativize(self.origin)
+        if name in self.nodes:
+            del self.nodes[name]
 
     def find_rdataset(self, name: Union[dns.name.Name, str], rdtype: Union[dns.rdatatype.RdataType, str], covers: Union[dns.rdatatype.RdataType, str]=dns.rdatatype.NONE, create: bool=False) -> dns.rdataset.Rdataset:
         """Look for an rdataset with the specified name and type in the zone,
@@ -207,7 +227,8 @@ class Zone(dns.transaction.TransactionManager):
 
         Returns a ``dns.rdataset.Rdataset``.
         """
-        pass
+        node = self.find_node(name, create)
+        return node.find_rdataset(self.rdclass, rdtype, covers, create)
 
     def get_rdataset(self, name: Union[dns.name.Name, str], rdtype: Union[dns.rdatatype.RdataType, str], covers: Union[dns.rdatatype.RdataType, str]=dns.rdatatype.NONE, create: bool=False) -> Optional[dns.rdataset.Rdataset]:
         """Look for an rdataset with the specified name and type in the zone.

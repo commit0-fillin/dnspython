@@ -7,13 +7,13 @@ class NullContext:
         return self.enter_result
 
     def __exit__(self, exc_type, exc_value, traceback):
-        pass
+        return None
 
     async def __aenter__(self):
         return self.enter_result
 
     async def __aexit__(self, exc_type, exc_value, traceback):
-        pass
+        return None
 
 class Socket:
 
@@ -27,6 +27,7 @@ class DatagramSocket(Socket):
 
     def __init__(self, family: int):
         self.family = family
+        self._socket = None
 
 class StreamSocket(Socket):
     pass

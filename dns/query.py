@@ -38,6 +38,10 @@ if _have_httpx:
             self._resolver = resolver
             self._bootstrap_address = bootstrap_address
             self._family = family
+            self._socket_kwargs = {
+                'local_port': local_port,
+                'family': family
+            }
 
     class _HTTPTransport(httpx.HTTPTransport):
 
@@ -142,21 +146,79 @@ def https(q: dns.message.Message, where: str, timeout: Optional[float]=None, por
 
     Returns a ``dns.message.Message``.
     """
-    pass
+    if not _have_httpx:
+        raise NoDOH("DNS over HTTPS (DOH) requires the httpx module")
+
+    wire = q.to_wire()
+    try:
+        if session is None:
+            transport = _HTTPTransport(local_port=source_port, bootstrap_address=bootstrap_address,
+                                       resolver=resolver, family=family)
+            session = httpx.Client(transport=transport, verify=verify)
+            close_session = True
+        else:
+            close_session = False
+
+        if dns.inet.is_address(where):
+            url = f'https://{where}:{port}{path}'
+        else:
+            url = where
+
+        headers = {
+            'accept': 'application/dns-message',
+            'content-type': 'application/dns-message',
+        }
+
+        if post:
+            response = session.post(url, content=wire, headers=headers, timeout=timeout)
+        else:
+            response = session.get(url, params={'dns': base64.urlsafe_b64encode(wire).rstrip(b'=')},
+                                   headers=headers, timeout=timeout)
+
+        response.raise_for_status()
+
+        r = dns.message.from_wire(response.content,
+                                  keyring=q.keyring,
+                                  request_mac=q.request_mac,
+                                  one_rr_per_rrset=one_rr_per_rrset,
+                                  ignore_trailing=ignore_trailing)
+        r.time = response.elapsed.total_seconds()
+        if not q.is_response(r):
+            raise BadResponse
+        return r
+    finally:
+        if close_session:
+            session.close()
 
 def _udp_recv(sock, max_size, expiration):
     """Reads a datagram from the socket.
     A Timeout exception will be raised if the operation is not completed
     by the expiration time.
     """
-    pass
+    while True:
+        try:
+            return sock.recvfrom(max_size)
+        except socket.timeout:
+            if expiration is not None and time.time() >= expiration:
+                raise dns.exception.Timeout
+        except BlockingIOError:
+            if expiration is not None and time.time() >= expiration:
+                raise dns.exception.Timeout
 
 def _udp_send(sock, data, destination, expiration):
     """Sends the specified datagram to destination over the socket.
     A Timeout exception will be raised if the operation is not completed
     by the expiration time.
     """
-    pass
+    while True:
+        try:
+            return sock.sendto(data, destination)
+        except socket.timeout:
+            if expiration is not None and time.time() >= expiration:
+                raise dns.exception.Timeout
+        except BlockingIOError:
+            if expiration is not None and time.time() >= expiration:
+                raise dns.exception.Timeout
 
 def send_udp(sock: Any, what: Union[dns.message.Message, bytes], destination: Any, expiration: Optional[float]=None) -> Tuple[int, float]:
     """Send a DNS message to the specified UDP socket.
@@ -174,7 +236,11 @@ def send_udp(sock: Any, what: Union[dns.message.Message, bytes], destination: An
 
     Returns an ``(int, float)`` tuple of bytes sent and the sent time.
     """
-    pass
+    if isinstance(what, dns.message.Message):
+        what = what.to_wire()
+    sent_time = time.time()
+    n = _udp_send(sock, what, destination, expiration)
+    return (n, sent_time)
 
 def receive_udp(sock: Any, destination: Optional[Any]=None, expiration: Optional[float]=None, ignore_unexpected: bool=False, one_rr_per_rrset: bool=False, keyring: Optional[Dict[dns.name.Name, dns.tsig.Key]]=None, request_mac: Optional[bytes]=b'', ignore_trailing: bool=False, raise_on_truncation: bool=False, ignore_errors: bool=False, query: Optional[dns.message.Message]=None) -> Any:
     """Read a DNS message from a UDP socket.

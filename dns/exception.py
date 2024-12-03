@@ -49,7 +49,8 @@ class DNSException(Exception):
         """Old exceptions supported only args and not kwargs.
 
         For sanity we do not allow to mix old and new behavior."""
-        pass
+        if args and kwargs:
+            raise TypeError("Cannot mix args and kwargs in DNSException")
 
     def _fmt_kwargs(self, **kwargs):
         """Format kwargs before printing them.
@@ -57,7 +58,7 @@ class DNSException(Exception):
         Resulting dictionary has to have keys necessary for str.format call
         on fmt class variable.
         """
-        pass
+        return {k: repr(v) for k, v in kwargs.items()}
 
     def __str__(self):
         if self.kwargs and self.fmt:

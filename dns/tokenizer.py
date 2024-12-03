@@ -123,7 +123,16 @@ class Tokenizer:
 
     def _get_char(self) -> str:
         """Read a character from input."""
-        pass
+        if self.ungotten_char is not None:
+            c = self.ungotten_char
+            self.ungotten_char = None
+        else:
+            c = self.file.read(1)
+            if c == '\n':
+                self.line_number += 1
+        if c == '' and self.multiline:
+            raise dns.exception.SyntaxError("unbalanced parentheses")
+        return c
 
     def where(self) -> Tuple[str, int]:
         """Return the current location in the input.
@@ -131,7 +140,7 @@ class Tokenizer:
         Returns a (string, int) tuple.  The first item is the filename of
         the input, the second is the current line number.
         """
-        pass
+        return (self.filename, self.line_number)
 
     def _unget_char(self, c: str) -> None:
         """Unget a character.
@@ -143,7 +152,11 @@ class Tokenizer:
         c: the character to unget
         raises UngetBufferFull: there is already an ungotten char
         """
-        pass
+        if self.ungotten_char is not None:
+            raise UngetBufferFull
+        self.ungotten_char = c
+        if c == '\n':
+            self.line_number -= 1
 
     def skip_whitespace(self) -> int:
         """Consume input until a non-whitespace character is encountered.
@@ -155,7 +168,17 @@ class Tokenizer:
 
         Returns the number of characters skipped.
         """
-        pass
+        skipped = 0
+        while True:
+            c = self._get_char()
+            if c == '' or c not in (' ', '\t', '\r', '\n'):
+                if c != '':
+                    self._unget_char(c)
+                return skipped
+            if c == '\n' and not self.multiline:
+                self._unget_char(c)
+                return skipped
+            skipped += 1
 
     def get(self, want_leading: bool=False, want_comment: bool=False) -> Token:
         """Get the next token.

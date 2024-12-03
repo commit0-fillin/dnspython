@@ -339,7 +339,14 @@ class Name:
 
         Returns a ``str``.
         """
-        pass
+        labels = [_escapify(label) for label in self.labels]
+        if len(labels) == 0:
+            return '@'
+        if len(labels) == 1 and labels[0] == b'':
+            return '.'
+        if omit_final_dot and self.is_absolute():
+            labels = labels[:-1]
+        return '.'.join(labels)
 
     def to_unicode(self, omit_final_dot: bool=False, idna_codec: Optional[IDNACodec]=None) -> str:
         """Convert name to Unicode text format.
@@ -561,7 +568,30 @@ def from_text(text: Union[bytes, str], origin: Optional[Name]=root, idna_codec: 
 
     Returns a ``dns.name.Name``.
     """
-    pass
+    if isinstance(text, str):
+        labels = text.split('.')
+    else:
+        labels = text.split(b'.')
+    
+    if idna_codec is None:
+        idna_codec = IDNA_2003
+
+    name_labels = []
+    for label in labels:
+        if isinstance(label, str):
+            try:
+                name_labels.append(idna_codec.encode(label))
+            except UnicodeError:
+                raise IDNAException(idna_exception=f"Invalid label: {label}")
+        else:
+            name_labels.append(label)
+
+    name = Name(name_labels)
+
+    if not name.is_absolute() and origin is not None:
+        name = name.concatenate(origin)
+
+    return name
 
 def from_wire_parser(parser: 'dns.wire.Parser') -> Name:
     """Convert possibly compressed wire format into a Name.

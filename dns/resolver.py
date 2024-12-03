@@ -753,27 +753,38 @@ class Resolver(BaseResolver):
                 raise dns.resolver.NXDOMAIN(qnames=resolution.qnames, responses=resolution.nxdomain_responses)
             done = False
             while not done:
-                for nameserver in self.nameservers:
-                    try:
+                nameserver = self._get_next_nameserver()
+                try:
+                    if tcp:
+                        response = dns.query.tcp(request, nameserver.address, timeout=self.timeout, port=nameserver.port, source=source, source_port=source_port)
+                    else:
                         response = dns.query.udp(request, nameserver.address, timeout=self.timeout, port=nameserver.port, source=source, source_port=source_port)
                         if response.flags & dns.flags.TC:
-                            if tcp:
-                                raise dns.exception.FormError
                             response = dns.query.tcp(request, nameserver.address, timeout=self.timeout, port=nameserver.port, source=source, source_port=source_port)
-                        if response.rcode() == dns.rcode.NOERROR or response.rcode() == dns.rcode.NXDOMAIN:
-                            done = True
-                            break
-                    except dns.exception.Timeout:
-                        continue
-                if not done:
-                    if time.time() - start > (lifetime or self.lifetime):
-                        raise dns.resolver.LifetimeTimeout(timeout=self.lifetime, errors=resolution.errors)
+                    if response.rcode() == dns.rcode.NOERROR or response.rcode() == dns.rcode.NXDOMAIN:
+                        done = True
+                except dns.exception.Timeout:
+                    resolution.errors.append((nameserver, 'timed out'))
+                    continue
+                except Exception as e:
+                    resolution.errors.append((nameserver, str(e)))
+                    continue
+                if time.time() - start > (lifetime or self.lifetime):
+                    raise dns.resolver.LifetimeTimeout(timeout=self.lifetime, errors=resolution.errors)
             if response.rcode() == dns.rcode.NXDOMAIN:
                 resolution.nxdomain_responses[resolution.qname] = response
             else:
                 answer = dns.resolver.Answer(resolution.qname, rdtype, rdclass, response, nameserver.address)
                 self.cache.put((resolution.qname, rdtype, rdclass), answer)
                 return answer
+
+    def _get_next_nameserver(self):
+        if self.rotate:
+            nameserver = self.nameservers.pop(0)
+            self.nameservers.append(nameserver)
+        else:
+            nameserver = self.nameservers[0]
+        return nameserver
 
     def query(self, qname: Union[dns.name.Name, str], rdtype: Union[dns.rdatatype.RdataType, str]=dns.rdatatype.A, rdclass: Union[dns.rdataclass.RdataClass, str]=dns.rdataclass.IN, tcp: bool=False, source: Optional[str]=None, raise_on_no_answer: bool=True, source_port: int=0, lifetime: Optional[float]=None) -> Answer:
         """Query nameservers to find the answer to the question.
@@ -798,7 +809,8 @@ class Resolver(BaseResolver):
         except for rdtype and rdclass are also supported by this
         function.
         """
-        return self.resolve(dns.reversename.from_address(ipaddr), rdtype='PTR', *args, **kwargs)
+        reverse_name = dns.reversename.from_address(ipaddr)
+        return self.resolve(reverse_name, rdtype='PTR', *args, **kwargs)
 
     def resolve_name(self, name: Union[dns.name.Name, str], family: int=socket.AF_UNSPEC, **kwargs: Any) -> HostAnswers:
         """Use a resolver to query for address records.
@@ -806,7 +818,7 @@ class Resolver(BaseResolver):
         This utilizes the resolve() method to perform A and/or AAAA lookups on
         the specified name.
 
-        *qname*, a ``dns.name.Name`` or ``str``, the name to resolve.
+        *name*, a ``dns.name.Name`` or ``str``, the name to resolve.
 
         *family*, an ``int``, the address family.  If socket.AF_UNSPEC
         (the default), both A and AAAA records will be retrieved.
@@ -846,12 +858,20 @@ class Resolver(BaseResolver):
 
         Returns a ``dns.name.Name``.
         """
+        if isinstance(name, str):
+            name = dns.name.from_text(name)
+        
         try:
-            answer = self.resolve(name, rdtype='CNAME')
-            cname = answer.rrset[0].target
-            return self.canonical_name(cname)
+            while True:
+                answer = self.resolve(name, rdtype='CNAME')
+                cname = answer.rrset[0].target
+                if cname == name:
+                    break
+                name = cname
         except dns.resolver.NoAnswer:
-            return dns.name.from_text(name)
+            pass
+        
+        return name
 
     def try_ddr(self, lifetime: float=5.0) -> None:
         """Try to update the resolver's nameservers using Discovery of Designated
@@ -866,11 +886,11 @@ class Resolver(BaseResolver):
         order.
 
         The current implementation does not use any address hints from the SVCB record,
-        nor does it resolve addresses for the SCVB target name, rather it assumes that
+        nor does it resolve addresses for the SVCB target name, rather it assumes that
         the bootstrap nameserver will always be one of the addresses and uses it.
         A future revision to the code may offer fuller support.  The code verifies that
         the bootstrap nameserver is in the Subject Alternative Name field of the
-        TLS certficate.
+        TLS certificate.
         """
         import dns._ddr
     
@@ -884,6 +904,9 @@ class Resolver(BaseResolver):
         nameservers = dns._ddr._get_nameservers_sync(answer, lifetime)
         if nameservers:
             self.nameservers = nameservers
+            self.port = nameservers[0].port
+            self.use_https = any(ns.https for ns in nameservers)
+            self.use_tls = any(ns.tls for ns in nameservers)
 default_resolver: Optional[Resolver] = None
 
 def get_default_resolver() -> Resolver:
@@ -891,6 +914,7 @@ def get_default_resolver() -> Resolver:
     global default_resolver
     if default_resolver is None:
         default_resolver = Resolver()
+        default_resolver.read_resolv_conf()
     return default_resolver
 
 def reset_default_resolver() -> None:
@@ -991,8 +1015,17 @@ def zone_for_name(name: Union[dns.name.Name, str], rdclass: dns.rdataclass.Rdata
         name = dns.name.from_text(name, dns.name.root)
     if not name.is_absolute():
         raise dns.resolver.NotAbsolute(name)
+    
+    def _remaining(start, lifetime):
+        if lifetime is None:
+            return None
+        elapsed = time.time() - start
+        if elapsed >= lifetime:
+            raise dns.resolver.LifetimeTimeout
+        return min(lifetime - elapsed, 1.0)
+
     start = time.time()
-    while 1:
+    while True:
         try:
             answer = resolver.resolve(name, dns.rdatatype.SOA, rdclass, tcp=tcp,
                                       lifetime=_remaining(start, lifetime))

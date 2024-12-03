@@ -50,7 +50,12 @@ class NXDOMAIN(dns.exception.DNSException):
     @property
     def canonical_name(self):
         """Return the unresolved canonical name."""
-        pass
+        if 'qnames' not in self.kwargs:
+            return None
+        qnames = self.kwargs['qnames']
+        if not qnames:
+            return None
+        return qnames[-1]
 
     def __add__(self, e_nx):
         """Augment by results from another NXDOMAIN exception."""
@@ -69,7 +74,7 @@ class NXDOMAIN(dns.exception.DNSException):
 
         Returns a list of ``dns.name.Name``.
         """
-        pass
+        return self.kwargs.get('qnames', [])
 
     def responses(self):
         """A map from queried names to their NXDOMAIN responses.
@@ -77,14 +82,14 @@ class NXDOMAIN(dns.exception.DNSException):
         Returns a dict mapping a ``dns.name.Name`` to a
         ``dns.message.Message``.
         """
-        pass
+        return self.kwargs.get('responses', {})
 
     def response(self, qname):
         """The response for query *qname*.
 
         Returns a ``dns.message.Message``.
         """
-        pass
+        return self.responses().get(qname)
 
 class YXDOMAIN(dns.exception.DNSException):
     """The DNS query name is too long after DNAME substitution."""
@@ -220,15 +225,16 @@ class CacheBase:
 
     def reset_statistics(self) -> None:
         """Reset all statistics to zero."""
-        pass
+        with self.lock:
+            self.statistics = CacheStatistics()
 
     def hits(self) -> int:
         """How many hits has the cache had?"""
-        pass
+        return self.statistics.hits
 
     def misses(self) -> int:
         """How many misses has the cache had?"""
-        pass
+        return self.statistics.misses
 
     def get_statistics_snapshot(self) -> CacheStatistics:
         """Return a consistent snapshot of all the statistics.
@@ -237,7 +243,8 @@ class CacheBase:
         snapshot than to call statistics methods such as hits() and
         misses() individually.
         """
-        pass
+        with self.lock:
+            return CacheStatistics(hits=self.statistics.hits, misses=self.statistics.misses)
 CacheKey = Tuple[dns.name.Name, dns.rdatatype.RdataType, dns.rdataclass.RdataClass]
 
 class Cache(CacheBase):
@@ -254,7 +261,12 @@ class Cache(CacheBase):
 
     def _maybe_clean(self) -> None:
         """Clean the cache if it's time to do so."""
-        pass
+        now = time.time()
+        if self.next_cleaning <= now:
+            keys_to_delete = [k for k, v in self.data.items() if v.expiration <= now]
+            for k in keys_to_delete:
+                del self.data[k]
+            self.next_cleaning = now + self.cleaning_interval
 
     def get(self, key: CacheKey) -> Optional[Answer]:
         """Get the answer associated with *key*.
@@ -266,7 +278,14 @@ class Cache(CacheBase):
 
         Returns a ``dns.resolver.Answer`` or ``None``.
         """
-        pass
+        with self.lock:
+            self._maybe_clean()
+            answer = self.data.get(key)
+            if answer is not None and answer.expiration > time.time():
+                self.statistics.hits += 1
+                return answer
+            self.statistics.misses += 1
+            return None
 
     def put(self, key: CacheKey, value: Answer) -> None:
         """Associate key and value in the cache.
@@ -276,7 +295,9 @@ class Cache(CacheBase):
 
         *value*, a ``dns.resolver.Answer``, the answer.
         """
-        pass
+        with self.lock:
+            self._maybe_clean()
+            self.data[key] = value
 
     def flush(self, key: Optional[CacheKey]=None) -> None:
         """Flush the cache.
@@ -287,7 +308,12 @@ class Cache(CacheBase):
         *key*, a ``(dns.name.Name, dns.rdatatype.RdataType, dns.rdataclass.RdataClass)``
         tuple whose values are the query name, rdtype, and rdclass respectively.
         """
-        pass
+        with self.lock:
+            if key is not None:
+                self.data.pop(key, None)
+            else:
+                self.data.clear()
+            self.next_cleaning = time.time() + self.cleaning_interval
 
 class LRUCacheNode:
     """LRUCache node."""
@@ -330,11 +356,27 @@ class LRUCache(CacheBase):
 
         Returns a ``dns.resolver.Answer`` or ``None``.
         """
-        pass
+        with self.lock:
+            node = self.data.get(key)
+            if node is None:
+                self.statistics.misses += 1
+                return None
+            if node.value.expiration <= time.time():
+                self._delete_node(node)
+                self.statistics.misses += 1
+                return None
+            node.hits += 1
+            self._move_to_front(node)
+            self.statistics.hits += 1
+            return node.value
 
     def get_hits_for_key(self, key: CacheKey) -> int:
         """Return the number of cache hits associated with the specified key."""
-        pass
+        with self.lock:
+            node = self.data.get(key)
+            if node is None:
+                return 0
+            return node.hits
 
     def put(self, key: CacheKey, value: Answer) -> None:
         """Associate key and value in the cache.
@@ -344,7 +386,18 @@ class LRUCache(CacheBase):
 
         *value*, a ``dns.resolver.Answer``, the answer.
         """
-        pass
+        with self.lock:
+            node = self.data.get(key)
+            if node is not None:
+                node.value = value
+                node.hits += 1
+                self._move_to_front(node)
+            else:
+                while len(self.data) >= self.max_size:
+                    self._remove_least_recently_used()
+                node = LRUCacheNode(key, value)
+                self._add_front(node)
+                self.data[key] = node
 
     def flush(self, key: Optional[CacheKey]=None) -> None:
         """Flush the cache.
@@ -355,7 +408,15 @@ class LRUCache(CacheBase):
         *key*, a ``(dns.name.Name, dns.rdatatype.RdataType, dns.rdataclass.RdataClass)``
         tuple whose values are the query name, rdtype, and rdclass respectively.
         """
-        pass
+        with self.lock:
+            if key is not None:
+                node = self.data.get(key)
+                if node is not None:
+                    self._delete_node(node)
+            else:
+                self.data.clear()
+                self.sentinel.prev = self.sentinel
+                self.sentinel.next = self.sentinel
 
 class _Resolution:
     """Helper class for dns.resolver.Resolver.resolve().
@@ -447,7 +508,25 @@ class BaseResolver:
 
     def reset(self) -> None:
         """Reset all resolver configuration to the defaults."""
-        pass
+        self.domain = dns.name.Name(labels=[])
+        self.nameserver_ports = {}
+        self.port = 53
+        self.search = []
+        self.use_search_by_default = True
+        self.timeout = 2.0
+        self.lifetime = 5.0
+        self.keyring = None
+        self.keyname = None
+        self.keyalgorithm = dns.tsig.default_algorithm
+        self.edns = -1
+        self.ednsflags = 0
+        self.payload = DEFAULT_EDNS_PAYLOAD
+        self.cache = None
+        self.flags = None
+        self.retry_servfail = False
+        self.rotate = False
+        self.ndots = None
+        self._nameservers = []
 
     def read_resolv_conf(self, f: Any) -> None:
         """Process *f* as a file in the /etc/resolv.conf format.  If f is
@@ -465,11 +544,68 @@ class BaseResolver:
         - options - supported options are rotate, timeout, edns0, and ndots
 
         """
-        pass
+        if isinstance(f, str):
+            with open(f, 'r') as f_obj:
+                self._read_resolv_conf(f_obj)
+        else:
+            self._read_resolv_conf(f)
+
+    def _read_resolv_conf(self, f):
+        for line in f:
+            if line.startswith('#') or line.isspace():
+                continue
+            tokens = line.split()
+            if len(tokens) < 2:
+                continue
+            if tokens[0] == 'nameserver':
+                self.nameservers = tokens[1:]
+            elif tokens[0] == 'domain':
+                self.domain = dns.name.from_text(tokens[1])
+            elif tokens[0] == 'search':
+                self.search = [dns.name.from_text(token) for token in tokens[1:]]
+            elif tokens[0] == 'options':
+                for token in tokens[1:]:
+                    if token == 'rotate':
+                        self.rotate = True
+                    elif token.startswith('timeout:'):
+                        self.timeout = float(token.split(':')[1])
+                    elif token == 'edns0':
+                        self.use_edns()
+                    elif token.startswith('ndots:'):
+                        self.ndots = int(token.split(':')[1])
 
     def read_registry(self) -> None:
         """Extract resolver configuration from the Windows registry."""
-        pass
+        if sys.platform != 'win32':
+            raise NotImplementedError("read_registry() is only supported on Windows")
+    
+        import winreg
+    
+        lm = winreg.ConnectRegistry(None, winreg.HKEY_LOCAL_MACHINE)
+        try:
+            tcp_params = winreg.OpenKey(lm, r'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters')
+            try:
+                self.domain = winreg.QueryValueEx(tcp_params, 'Domain')[0]
+            except WindowsError:
+                pass
+            try:
+                self.search = winreg.QueryValueEx(tcp_params, 'SearchList')[0].split(',')
+            except WindowsError:
+                pass
+        
+            interfaces = winreg.OpenKey(lm, r'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces')
+            for i in range(winreg.QueryInfoKey(interfaces)[0]):
+                try:
+                    interface_key = winreg.OpenKey(interfaces, winreg.EnumKey(interfaces, i))
+                    try:
+                        nameservers = winreg.QueryValueEx(interface_key, 'NameServer')[0].split(',')
+                        self.nameservers.extend(nameservers)
+                    except WindowsError:
+                        pass
+                except WindowsError:
+                    pass
+        finally:
+            winreg.CloseKey(lm)
 
     def use_tsig(self, keyring: Any, keyname: Optional[Union[dns.name.Name, str]]=None, algorithm: Union[dns.name.Name, str]=dns.tsig.default_algorithm) -> None:
         """Add a TSIG signature to each query.
@@ -477,7 +613,9 @@ class BaseResolver:
         The parameters are passed to ``dns.message.Message.use_tsig()``;
         see its documentation for details.
         """
-        pass
+        self.keyring = keyring
+        self.keyname = keyname
+        self.keyalgorithm = algorithm
 
     def use_edns(self, edns: Optional[Union[int, bool]]=0, ednsflags: int=0, payload: int=dns.message.DEFAULT_EDNS_PAYLOAD, options: Optional[List[dns.edns.Option]]=None) -> None:
         """Configure EDNS behavior.
@@ -496,14 +634,22 @@ class BaseResolver:
         *options*, a list of ``dns.edns.Option`` objects or ``None``, the EDNS
         options.
         """
-        pass
+        if edns is None or edns is False:
+            self.edns = -1
+        elif edns is True:
+            self.edns = 0
+        else:
+            self.edns = edns
+        self.ednsflags = ednsflags
+        self.payload = payload
+        self.options = options
 
     def set_flags(self, flags: int) -> None:
         """Overrides the default flags with your own.
 
         *flags*, an ``int``, the message flags to use.
         """
-        pass
+        self.flags = flags
 
     @nameservers.setter
     def nameservers(self, nameservers: Sequence[Union[str, dns.nameserver.Nameserver]]) -> None:
@@ -514,7 +660,15 @@ class BaseResolver:
 
         Raises ``ValueError`` if *nameservers* is not a list of nameservers.
         """
-        pass
+        nss = []
+        for ns in nameservers:
+            if isinstance(ns, str):
+                nss.append(dns.nameserver.Do53Nameserver(ns))
+            elif isinstance(ns, dns.nameserver.Nameserver):
+                nss.append(ns)
+            else:
+                raise ValueError(f'invalid nameserver: {ns}')
+        self._nameservers = nss
 
 class Resolver(BaseResolver):
     """DNS stub resolver."""
@@ -570,7 +724,37 @@ class Resolver(BaseResolver):
         Returns a ``dns.resolver.Answer`` instance.
 
         """
-        pass
+        resolution = _Resolution(self, qname, rdtype, rdclass, tcp, raise_on_no_answer, search)
+        start = time.time()
+        while True:
+            (request, answer) = resolution.next_request()
+            if answer:
+                return answer
+            if request is None:
+                raise dns.resolver.NXDOMAIN(qnames=resolution.qnames, responses=resolution.nxdomain_responses)
+            done = False
+            while not done:
+                for nameserver in self.nameservers:
+                    try:
+                        response = dns.query.udp(request, nameserver.address, timeout=self.timeout, port=nameserver.port, source=source, source_port=source_port)
+                        if response.flags & dns.flags.TC:
+                            if tcp:
+                                raise dns.exception.FormError
+                            response = dns.query.tcp(request, nameserver.address, timeout=self.timeout, port=nameserver.port, source=source, source_port=source_port)
+                        if response.rcode() == dns.rcode.NOERROR or response.rcode() == dns.rcode.NXDOMAIN:
+                            done = True
+                            break
+                    except dns.exception.Timeout:
+                        continue
+                if not done:
+                    if time.time() - start > (lifetime or self.lifetime):
+                        raise dns.resolver.LifetimeTimeout(timeout=self.lifetime, errors=resolution.errors)
+            if response.rcode() == dns.rcode.NXDOMAIN:
+                resolution.nxdomain_responses[resolution.qname] = response
+            else:
+                answer = dns.resolver.Answer(resolution.qname, rdtype, rdclass, response, nameserver.address)
+                self.cache.put((resolution.qname, rdtype, rdclass), answer)
+                return answer
 
     def query(self, qname: Union[dns.name.Name, str], rdtype: Union[dns.rdatatype.RdataType, str]=dns.rdatatype.A, rdclass: Union[dns.rdataclass.RdataClass, str]=dns.rdataclass.IN, tcp: bool=False, source: Optional[str]=None, raise_on_no_answer: bool=True, source_port: int=0, lifetime: Optional[float]=None) -> Answer:
         """Query nameservers to find the answer to the question.
@@ -580,7 +764,7 @@ class Resolver(BaseResolver):
         dnspython.  See the documentation for the resolve() method for
         further details.
         """
-        pass
+        return self.resolve(qname, rdtype, rdclass, tcp, source, raise_on_no_answer, source_port, lifetime, search=True)
 
     def resolve_address(self, ipaddr: str, *args: Any, **kwargs: Any) -> Answer:
         """Use a resolver to run a reverse query for PTR records.
@@ -595,7 +779,7 @@ class Resolver(BaseResolver):
         except for rdtype and rdclass are also supported by this
         function.
         """
-        pass
+        return self.resolve(dns.reversename.from_address(ipaddr), rdtype='PTR', *args, **kwargs)
 
     def resolve_name(self, name: Union[dns.name.Name, str], family: int=socket.AF_UNSPEC, **kwargs: Any) -> HostAnswers:
         """Use a resolver to query for address records.
@@ -612,7 +796,22 @@ class Resolver(BaseResolver):
         except for rdtype and rdclass are also supported by this
         function.
         """
-        pass
+        answers = HostAnswers()
+        if family == socket.AF_INET or family == socket.AF_UNSPEC:
+            try:
+                answer = self.resolve(name, rdtype='A', **kwargs)
+                answers[dns.rdatatype.A] = answer
+            except dns.resolver.NoAnswer:
+                pass
+        if family == socket.AF_INET6 or family == socket.AF_UNSPEC:
+            try:
+                answer = self.resolve(name, rdtype='AAAA', **kwargs)
+                answers[dns.rdatatype.AAAA] = answer
+            except dns.resolver.NoAnswer:
+                pass
+        if len(answers) == 0:
+            raise dns.resolver.NoAnswer(response=None)
+        return answers
 
     def canonical_name(self, name: Union[dns.name.Name, str]) -> dns.name.Name:
         """Determine the canonical name of *name*.
@@ -628,7 +827,12 @@ class Resolver(BaseResolver):
 
         Returns a ``dns.name.Name``.
         """
-        pass
+        try:
+            answer = self.resolve(name, rdtype='CNAME')
+            cname = answer.rrset[0].target
+            return self.canonical_name(cname)
+        except dns.resolver.NoAnswer:
+            return dns.name.from_text(name)
 
     def try_ddr(self, lifetime: float=5.0) -> None:
         """Try to update the resolver's nameservers using Discovery of Designated
@@ -649,12 +853,26 @@ class Resolver(BaseResolver):
         the bootstrap nameserver is in the Subject Alternative Name field of the
         TLS certficate.
         """
-        pass
+        import dns._ddr
+    
+        try:
+            answer = self.resolve('_dns.resolver.arpa', 'SVCB', lifetime=lifetime)
+        except dns.resolver.NXDOMAIN:
+            return
+        except dns.exception.Timeout:
+            return
+
+        nameservers = dns._ddr._get_nameservers_sync(answer, lifetime)
+        if nameservers:
+            self.nameservers = nameservers
 default_resolver: Optional[Resolver] = None
 
 def get_default_resolver() -> Resolver:
     """Get the default resolver, initializing it if necessary."""
-    pass
+    global default_resolver
+    if default_resolver is None:
+        default_resolver = Resolver()
+    return default_resolver
 
 def reset_default_resolver() -> None:
     """Re-initialize default resolver.
@@ -662,7 +880,9 @@ def reset_default_resolver() -> None:
     Note that the resolver configuration (i.e. /etc/resolv.conf on UNIX
     systems) will be re-read immediately.
     """
-    pass
+    global default_resolver
+    default_resolver = None
+    get_default_resolver()
 
 def resolve(qname: Union[dns.name.Name, str], rdtype: Union[dns.rdatatype.RdataType, str]=dns.rdatatype.A, rdclass: Union[dns.rdataclass.RdataClass, str]=dns.rdataclass.IN, tcp: bool=False, source: Optional[str]=None, raise_on_no_answer: bool=True, source_port: int=0, lifetime: Optional[float]=None, search: Optional[bool]=None) -> Answer:
     """Query nameservers to find the answer to the question.
@@ -673,7 +893,9 @@ def resolve(qname: Union[dns.name.Name, str], rdtype: Union[dns.rdatatype.RdataT
     See ``dns.resolver.Resolver.resolve`` for more information on the
     parameters.
     """
-    pass
+    return get_default_resolver().resolve(qname, rdtype, rdclass, tcp, source,
+                                          raise_on_no_answer, source_port,
+                                          lifetime, search)
 
 def query(qname: Union[dns.name.Name, str], rdtype: Union[dns.rdatatype.RdataType, str]=dns.rdatatype.A, rdclass: Union[dns.rdataclass.RdataClass, str]=dns.rdataclass.IN, tcp: bool=False, source: Optional[str]=None, raise_on_no_answer: bool=True, source_port: int=0, lifetime: Optional[float]=None) -> Answer:
     """Query nameservers to find the answer to the question.
@@ -683,7 +905,8 @@ def query(qname: Union[dns.name.Name, str], rdtype: Union[dns.rdatatype.RdataTyp
     dnspython.  See the documentation for the resolve() method for
     further details.
     """
-    pass
+    return resolve(qname, rdtype, rdclass, tcp, source, raise_on_no_answer,
+                   source_port, lifetime, search=True)
 
 def resolve_address(ipaddr: str, *args: Any, **kwargs: Any) -> Answer:
     """Use a resolver to run a reverse query for PTR records.
@@ -691,7 +914,7 @@ def resolve_address(ipaddr: str, *args: Any, **kwargs: Any) -> Answer:
     See ``dns.resolver.Resolver.resolve_address`` for more information on the
     parameters.
     """
-    pass
+    return get_default_resolver().resolve_address(ipaddr, *args, **kwargs)
 
 def resolve_name(name: Union[dns.name.Name, str], family: int=socket.AF_UNSPEC, **kwargs: Any) -> HostAnswers:
     """Use a resolver to query for address records.
@@ -699,7 +922,7 @@ def resolve_name(name: Union[dns.name.Name, str], family: int=socket.AF_UNSPEC, 
     See ``dns.resolver.Resolver.resolve_name`` for more information on the
     parameters.
     """
-    pass
+    return get_default_resolver().resolve_name(name, family, **kwargs)
 
 def canonical_name(name: Union[dns.name.Name, str]) -> dns.name.Name:
     """Determine the canonical name of *name*.
@@ -707,7 +930,7 @@ def canonical_name(name: Union[dns.name.Name, str]) -> dns.name.Name:
     See ``dns.resolver.Resolver.canonical_name`` for more information on the
     parameters and possible exceptions.
     """
-    pass
+    return get_default_resolver().canonical_name(name)
 
 def try_ddr(lifetime: float=5.0) -> None:
     """Try to update the default resolver's nameservers using Discovery of Designated
@@ -716,7 +939,7 @@ def try_ddr(lifetime: float=5.0) -> None:
 
     See :py:func:`dns.resolver.Resolver.try_ddr` for more information.
     """
-    pass
+    get_default_resolver().try_ddr(lifetime)
 
 def zone_for_name(name: Union[dns.name.Name, str], rdclass: dns.rdataclass.RdataClass=dns.rdataclass.IN, tcp: bool=False, resolver: Optional[Resolver]=None, lifetime: Optional[float]=None) -> dns.name.Name:
     """Find the name of the zone which contains the specified name.
@@ -743,7 +966,26 @@ def zone_for_name(name: Union[dns.name.Name, str], rdclass: dns.rdataclass.Rdata
 
     Returns a ``dns.name.Name``.
     """
-    pass
+    if resolver is None:
+        resolver = get_default_resolver()
+    if isinstance(name, str):
+        name = dns.name.from_text(name, dns.name.root)
+    if not name.is_absolute():
+        raise dns.resolver.NotAbsolute(name)
+    start = time.time()
+    while 1:
+        try:
+            answer = resolver.resolve(name, dns.rdatatype.SOA, rdclass, tcp=tcp,
+                                      lifetime=_remaining(start, lifetime))
+            if answer.rrset.name == name:
+                return name
+            # otherwise we were CNAMEd or DNAMEd and need to look higher
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            pass
+        try:
+            name = name.parent()
+        except dns.name.NoParent:
+            raise dns.resolver.NoRootSOA
 
 def make_resolver_at(where: Union[dns.name.Name, str], port: int=53, family: int=socket.AF_UNSPEC, resolver: Optional[Resolver]=None) -> Resolver:
     """Make a stub resolver using the specified destination as the full resolver.
@@ -763,7 +1005,30 @@ def make_resolver_at(where: Union[dns.name.Name, str], port: int=53, family: int
 
     Returns a ``dns.resolver.Resolver`` or raises an exception.
     """
-    pass
+    if resolver is None:
+        resolver = get_default_resolver()
+    
+    if dns.inet.is_address(where):
+        nameserver = where
+    else:
+        answers = resolver.resolve_name(where, family)
+        if family == socket.AF_UNSPEC:
+            nameserver = answers[0].address
+        else:
+            for answer in answers:
+                if answer.rdtype == dns.rdatatype.A and family == socket.AF_INET:
+                    nameserver = answer.address
+                    break
+                elif answer.rdtype == dns.rdatatype.AAAA and family == socket.AF_INET6:
+                    nameserver = answer.address
+                    break
+            else:
+                raise dns.resolver.NoAnswer
+
+    new_resolver = Resolver()
+    new_resolver.nameservers = [nameserver]
+    new_resolver.port = port
+    return new_resolver
 
 def resolve_at(where: Union[dns.name.Name, str], qname: Union[dns.name.Name, str], rdtype: Union[dns.rdatatype.RdataType, str]=dns.rdatatype.A, rdclass: Union[dns.rdataclass.RdataClass, str]=dns.rdataclass.IN, tcp: bool=False, source: Optional[str]=None, raise_on_no_answer: bool=True, source_port: int=0, lifetime: Optional[float]=None, search: Optional[bool]=None, port: int=53, family: int=socket.AF_UNSPEC, resolver: Optional[Resolver]=None) -> Answer:
     """Query nameservers to find the answer to the question.
@@ -779,7 +1044,9 @@ def resolve_at(where: Union[dns.name.Name, str], qname: Union[dns.name.Name, str
     ``dns.resolver.make_resolver_at()`` and then use that resolver for the queries
     instead of calling ``resolve_at()`` multiple times.
     """
-    pass
+    resolver_at = make_resolver_at(where, port, family, resolver)
+    return resolver_at.resolve(qname, rdtype, rdclass, tcp, source,
+                               raise_on_no_answer, source_port, lifetime, search)
 _protocols_for_socktype = {socket.SOCK_DGRAM: [socket.SOL_UDP], socket.SOCK_STREAM: [socket.SOL_TCP]}
 _resolver = None
 _original_getaddrinfo = socket.getaddrinfo
@@ -802,8 +1069,24 @@ def override_system_resolver(resolver: Optional[Resolver]=None) -> None:
 
     resolver, a ``dns.resolver.Resolver`` or ``None``, the resolver to use.
     """
-    pass
+    if resolver is None:
+        resolver = get_default_resolver()
+    global _resolver
+    _resolver = resolver
+    socket.getaddrinfo = _getaddrinfo
+    socket.getnameinfo = _getnameinfo
+    socket.getfqdn = _getfqdn
+    socket.gethostbyname = _gethostbyname
+    socket.gethostbyname_ex = _gethostbyname_ex
+    socket.gethostbyaddr = _gethostbyaddr
 
 def restore_system_resolver() -> None:
     """Undo the effects of prior override_system_resolver()."""
-    pass
+    global _resolver
+    _resolver = None
+    socket.getaddrinfo = _original_getaddrinfo
+    socket.getnameinfo = _original_getnameinfo
+    socket.getfqdn = _original_getfqdn
+    socket.gethostbyname = _original_gethostbyname
+    socket.gethostbyname_ex = _original_gethostbyname_ex
+    socket.gethostbyaddr = _original_gethostbyaddr

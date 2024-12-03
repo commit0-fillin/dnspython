@@ -38,7 +38,10 @@ def from_text(text: str) -> Rcode:
 
     Returns a ``dns.rcode.Rcode``.
     """
-    pass
+    try:
+        return Rcode.make(text)
+    except ValueError:
+        raise UnknownRcode(f"Unknown rcode: {text}")
 
 def from_flags(flags: int, ednsflags: int) -> Rcode:
     """Return the rcode value encoded by flags and ednsflags.
@@ -51,7 +54,11 @@ def from_flags(flags: int, ednsflags: int) -> Rcode:
 
     Returns a ``dns.rcode.Rcode``.
     """
-    pass
+    rcode = (flags & 0x000f) | ((ednsflags >> 20) & 0xff0)
+    if 0 <= rcode <= 4095:
+        return Rcode(rcode)
+    else:
+        raise ValueError(f"rcode {rcode} is out of range")
 
 def to_flags(value: Rcode) -> Tuple[int, int]:
     """Return a (flags, ednsflags) tuple which encodes the rcode.
@@ -62,7 +69,12 @@ def to_flags(value: Rcode) -> Tuple[int, int]:
 
     Returns an ``(int, int)`` tuple.
     """
-    pass
+    if 0 <= value <= 4095:
+        flags = value & 0x000f
+        ednsflags = (value & 0xff0) << 20
+        return (flags, ednsflags)
+    else:
+        raise ValueError(f"rcode {value} is out of range")
 
 def to_text(value: Rcode, tsig: bool=False) -> str:
     """Convert rcode into text.
@@ -73,7 +85,13 @@ def to_text(value: Rcode, tsig: bool=False) -> str:
 
     Returns a ``str``.
     """
-    pass
+    if 0 <= value <= 4095:
+        try:
+            return Rcode(value).name
+        except ValueError:
+            return str(value)
+    else:
+        raise ValueError(f"rcode {value} is out of range")
 NOERROR = Rcode.NOERROR
 FORMERR = Rcode.FORMERR
 SERVFAIL = Rcode.SERVFAIL

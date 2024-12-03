@@ -463,7 +463,26 @@ class _Resolution:
         Returns a (request, answer) tuple.  At most one of request or
         answer will not be None.
         """
-        pass
+        while len(self.qnames) > 0:
+            qname = self.qnames.pop(0)
+            key = (qname, self.rdtype, self.rdclass)
+            answer = self.resolver.cache.get(key)
+            if answer is not None:
+                if answer.rrset is None and answer.response.rcode() == dns.rcode.NXDOMAIN:
+                    # Cache hit on NXDOMAIN
+                    self.nxdomain_responses[qname] = answer.response
+                    continue
+                # Cache hit
+                return (None, answer)
+            
+            # Cache miss, create request
+            request = dns.message.make_query(qname, self.rdtype, self.rdclass)
+            if self.resolver.keyname is not None:
+                request.use_tsig(self.resolver.keyring, self.resolver.keyname)
+            request.use_edns(self.resolver.edns, self.resolver.ednsflags, self.resolver.payload)
+            return (request, None)
+        
+        return (None, None)
 
 class BaseResolver:
     """DNS stub resolver."""

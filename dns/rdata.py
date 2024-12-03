@@ -31,30 +31,36 @@ def _wordbreak(data, chunksize=_chunksize, separator=b' '):
     """Break a binary string into chunks of chunksize characters separated by
     a space.
     """
-    pass
+    return separator.join(data[i:i+chunksize] for i in range(0, len(data), chunksize))
 
 def _hexify(data, chunksize=_chunksize, separator=b' ', **kw):
     """Convert a binary string into its hex encoding, broken up into chunks
     of chunksize characters separated by a separator.
     """
-    pass
+    hex_data = binascii.hexlify(data)
+    return _wordbreak(hex_data, chunksize, separator)
 
 def _base64ify(data, chunksize=_chunksize, separator=b' ', **kw):
     """Convert a binary string into its base64 encoding, broken up into chunks
     of chunksize characters separated by a separator.
     """
-    pass
+    b64_data = base64.b64encode(data)
+    return _wordbreak(b64_data, chunksize, separator)
 __escaped = b'"\\'
 
 def _escapify(qstring):
     """Escape the characters in a quoted string which need it."""
-    pass
+    text = qstring.decode('ascii')
+    return ''.join(('\\' + c if c in __escaped else c) for c in text)
 
 def _truncate_bitmap(what):
     """Determine the index of greatest byte that isn't all zeros, and
     return the bitmap that contains all the bytes less than that index.
     """
-    pass
+    for i in range(len(what) - 1, -1, -1):
+        if what[i] != 0:
+            return what[:i+1]
+    return b''
 _constify = dns.immutable.constify
 
 @dns.immutable.immutable
@@ -96,7 +102,7 @@ class Rdata:
 
         Returns a ``dns.rdatatype.RdataType``.
         """
-        pass
+        return dns.rdatatype.NONE
 
     def extended_rdatatype(self) -> int:
         """Return a 32-bit type value, the least significant 16 bits of

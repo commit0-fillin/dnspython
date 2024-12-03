@@ -79,7 +79,11 @@ class Renderer:
         compression table entries that pointed beyond the truncation
         point.
         """
-        pass
+        self.output.seek(where)
+        self.output.truncate()
+        for k, v in list(self.compress.items()):
+            if v >= where:
+                del self.compress[k]
 
     def _set_section(self, section):
         """Set the renderer's current section.
@@ -90,11 +94,21 @@ class Renderer:
         Raises dns.exception.FormError if an attempt was made to set
         a section value less than the current section.
         """
-        pass
+        if self.section != section:
+            if self.section < section:
+                self.section = section
+            else:
+                raise dns.exception.FormError('sections must be rendered in order')
 
     def add_question(self, qname, rdtype, rdclass=dns.rdataclass.IN):
         """Add a question to the message."""
-        pass
+        self._set_section(QUESTION)
+        before = self.output.tell()
+        qname.to_wire(self.output, self.compress, self.origin)
+        self.output.write(struct.pack("!HH", rdtype, rdclass))
+        after = self.output.tell()
+        self.counts[QUESTION] += 1
+        return (before, after)
 
     def add_rrset(self, section, rrset, **kw):
         """Add the rrset to the specified section.
@@ -102,7 +116,20 @@ class Renderer:
         Any keyword arguments are passed on to the rdataset's to_wire()
         routine.
         """
-        pass
+        self._set_section(section)
+        before = self.output.tell()
+        n = rrset.name.to_wire(self.output, self.compress, self.origin)
+        self.output.write(struct.pack("!HHI", rrset.rdtype, rrset.rdclass, rrset.ttl))
+        rdataset_start = self.output.tell()
+        self.output.write(b'\x00\x00')  # placeholder for rdlen
+        n += rrset.to_wire(self.output, self.compress, self.origin, **kw)
+        after = self.output.tell()
+        rdlen = after - rdataset_start - 2
+        self.output.seek(rdataset_start)
+        self.output.write(struct.pack("!H", rdlen))
+        self.output.seek(after)
+        self.counts[section] += 1
+        return (before, after)
 
     def add_rdataset(self, section, name, rdataset, **kw):
         """Add the rdataset to the specified section, using the specified
@@ -111,7 +138,20 @@ class Renderer:
         Any keyword arguments are passed on to the rdataset's to_wire()
         routine.
         """
-        pass
+        self._set_section(section)
+        before = self.output.tell()
+        name.to_wire(self.output, self.compress, self.origin)
+        self.output.write(struct.pack("!HHI", rdataset.rdtype, rdataset.rdclass, rdataset.ttl))
+        rdataset_start = self.output.tell()
+        self.output.write(b'\x00\x00')  # placeholder for rdlen
+        n = rdataset.to_wire(self.output, self.compress, self.origin, **kw)
+        after = self.output.tell()
+        rdlen = after - rdataset_start - 2
+        self.output.seek(rdataset_start)
+        self.output.write(struct.pack("!H", rdlen))
+        self.output.seek(after)
+        self.counts[section] += 1
+        return (before, after)
 
     def add_opt(self, opt, pad=0, opt_size=0, tsig_size=0):
         """Add *opt* to the additional section, applying padding if desired.  The
@@ -120,15 +160,60 @@ class Renderer:
 
         Note that we don't have reliable way of knowing how big a GSS-TSIG digest
         might be, so we we might not get an even multiple of the pad in that case."""
-        pass
+        self._set_section(ADDITIONAL)
+        before = self.output.tell()
+        start = before
+        self.output.write(b'\x00')  # empty name
+        self.output.write(struct.pack('!HHIH', opt.rdtype, opt.rdclass,
+                                      opt.ttl, 0))  # placeholder for rdlen
+        rdata_start = self.output.tell()
+        opt.to_wire(self.output)
+        after = self.output.tell()
+        rdlen = after - rdata_start
+        if pad:
+            desired_length = (((before + opt_size + tsig_size - 1) // pad) + 1) * pad
+            current_length = after + tsig_size
+            pad_length = desired_length - current_length
+            if pad_length > 0:
+                self.output.write(b'\x00' * pad_length)
+                after += pad_length
+                rdlen += pad_length
+        self.output.seek(start + 11)
+        self.output.write(struct.pack('!H', rdlen))
+        self.output.seek(after)
+        self.counts[ADDITIONAL] += 1
+        return (before, after)
 
     def add_edns(self, edns, ednsflags, payload, options=None):
         """Add an EDNS OPT record to the message."""
-        pass
+        # pylint: disable=unused-argument
+        opt = dns.message.OPT(payload, dns.rdatatype.OPT, ednsflags)
+        if options is not None:
+            for option in options:
+                opt.add_option(option)
+        self.add_opt(opt)
 
     def add_tsig(self, keyname, secret, fudge, id, tsig_error, other_data, request_mac, algorithm=dns.tsig.default_algorithm):
         """Add a TSIG signature to the message."""
-        pass
+        self._set_section(ADDITIONAL)
+        before = self.output.tell()
+        s = self.output.getvalue()
+        (tsig_rdata, mac, ctx) = dns.tsig.sign(s, keyname, secret, int(time.time()),
+                                               fudge, id, tsig_error, other_data,
+                                               request_mac, algorithm=algorithm)
+        keyname.to_wire(self.output, self.compress, self.origin)
+        self.output.write(struct.pack('!HHIH', dns.rdatatype.TSIG, dns.rdataclass.ANY,
+                                      0, 0))
+        rdata_start = self.output.tell()
+        self.output.write(tsig_rdata)
+        after = self.output.tell()
+        rdlen = after - rdata_start
+        self.output.seek(rdata_start - 2)
+        self.output.write(struct.pack('!H', rdlen))
+        self.output.seek(after)
+        self.counts[ADDITIONAL] += 1
+        self.mac = mac
+        return (before, after)
 
     def add_multi_tsig(self, ctx, keyname, secret, fudge, id, tsig_error, other_data, request_mac, algorithm=dns.tsig.default_algorithm):
         """Add a TSIG signature to the message. Unlike add_tsig(), this can be
@@ -138,7 +223,26 @@ class Renderer:
         For the first message in the sequence, give ctx=None. For each
         subsequent message, give the ctx that was returned from the
         add_multi_tsig() call for the previous message."""
-        pass
+        self._set_section(ADDITIONAL)
+        before = self.output.tell()
+        s = self.output.getvalue()
+        (tsig_rdata, mac, ctx) = dns.tsig.sign(s, keyname, secret, int(time.time()),
+                                               fudge, id, tsig_error, other_data,
+                                               request_mac, algorithm=algorithm,
+                                               ctx=ctx, multi=True)
+        keyname.to_wire(self.output, self.compress, self.origin)
+        self.output.write(struct.pack('!HHIH', dns.rdatatype.TSIG, dns.rdataclass.ANY,
+                                      0, 0))
+        rdata_start = self.output.tell()
+        self.output.write(tsig_rdata)
+        after = self.output.tell()
+        rdlen = after - rdata_start
+        self.output.seek(rdata_start - 2)
+        self.output.write(struct.pack('!H', rdlen))
+        self.output.seek(after)
+        self.counts[ADDITIONAL] += 1
+        self.mac = mac
+        return (ctx, before, after)
 
     def write_header(self):
         """Write the DNS message header.
@@ -147,16 +251,19 @@ class Renderer:
         have been rendered, but before the optional TSIG signature
         is added.
         """
-        pass
+        self.output.seek(0)
+        self.output.write(struct.pack('!HHHHHH', self.id, self.flags,
+                                      self.counts[0], self.counts[1],
+                                      self.counts[2], self.counts[3]))
 
     def get_wire(self):
         """Return the wire format message."""
-        pass
+        return self.output.getvalue()
 
     def reserve(self, size: int) -> None:
         """Reserve *size* bytes."""
-        pass
+        self.reserved += size
 
     def release_reserved(self) -> None:
         """Release the reserved bytes."""
-        pass
+        self.reserved = 0

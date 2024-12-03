@@ -30,4 +30,4 @@ class OPT(dns.rdata.Rdata):
     @property
     def payload(self):
         """payload size"""
-        pass
+        return self.rdclass

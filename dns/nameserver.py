@@ -9,7 +9,10 @@ import dns.query
 class Nameserver:
 
     def __init__(self):
-        pass
+        """
+        Initialize the Nameserver base class.
+        This is an abstract base class, so it doesn't need any attributes.
+        """
 
     def __str__(self):
         raise NotImplementedError

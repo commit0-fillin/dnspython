@@ -21,7 +21,10 @@ def from_text(text: str) -> Opcode:
 
     Returns an ``int``.
     """
-    pass
+    try:
+        return Opcode.make(text)
+    except ValueError:
+        raise UnknownOpcode(f"Unknown opcode: {text}")
 
 def from_flags(flags: int) -> Opcode:
     """Extract an opcode from DNS message flags.
@@ -30,7 +33,7 @@ def from_flags(flags: int) -> Opcode:
 
     Returns an ``int``.
     """
-    pass
+    return Opcode((flags >> 11) & 0xF)
 
 def to_flags(value: Opcode) -> int:
     """Convert an opcode to a value suitable for ORing into DNS message
@@ -40,7 +43,7 @@ def to_flags(value: Opcode) -> int:
 
     Returns an ``int``.
     """
-    pass
+    return (int(value) & 0xF) << 11
 
 def to_text(value: Opcode) -> str:
     """Convert an opcode to text.
@@ -51,7 +54,10 @@ def to_text(value: Opcode) -> str:
 
     Returns a ``str``.
     """
-    pass
+    try:
+        return Opcode(value).name
+    except ValueError:
+        raise UnknownOpcode(f"Unknown opcode: {value}")
 
 def is_update(flags: int) -> bool:
     """Is the opcode in flags UPDATE?
@@ -60,7 +66,7 @@ def is_update(flags: int) -> bool:
 
     Returns a ``bool``.
     """
-    pass
+    return from_flags(flags) == Opcode.UPDATE
 QUERY = Opcode.QUERY
 IQUERY = Opcode.IQUERY
 STATUS = Opcode.STATUS

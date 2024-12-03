@@ -19,7 +19,11 @@ def from_e164(text: str, origin: Optional[dns.name.Name]=public_enum_domain) -> 
 
     Returns a ``dns.name.Name``.
     """
-    pass
+    digits = ''.join(c for c in text if c.isdigit())
+    labels = list(reversed(digits))
+    if origin is None:
+        origin = public_enum_domain
+    return dns.name.Name(labels + origin.labels)
 
 def to_e164(name: dns.name.Name, origin: Optional[dns.name.Name]=public_enum_domain, want_plus_prefix: bool=True) -> str:
     """Convert an ENUM domain name into an E.164 number.
@@ -41,7 +45,13 @@ def to_e164(name: dns.name.Name, origin: Optional[dns.name.Name]=public_enum_dom
     Returns a ``str``.
 
     """
-    pass
+    if origin:
+        name = name.relativize(origin)
+    labels = list(reversed(name.labels))
+    digits = ''.join(label.decode() for label in labels)
+    if want_plus_prefix:
+        return '+' + digits
+    return digits
 
 def query(number: str, domains: Iterable[Union[dns.name.Name, str]], resolver: Optional[dns.resolver.Resolver]=None) -> dns.resolver.Answer:
     """Look for NAPTR RRs for the specified number in the specified domains.
@@ -55,4 +65,17 @@ def query(number: str, domains: Iterable[Union[dns.name.Name, str]], resolver: O
     *resolver*, a ``dns.resolver.Resolver``, is the resolver to use.  If
     ``None``, the default resolver is used.
     """
-    pass
+    if resolver is None:
+        resolver = dns.resolver.get_default_resolver()
+    
+    for domain in domains:
+        if isinstance(domain, str):
+            domain = dns.name.from_text(domain)
+        e164_name = from_e164(number, domain)
+        try:
+            answer = resolver.resolve(e164_name, 'NAPTR')
+            return answer
+        except dns.resolver.NXDOMAIN:
+            continue
+    
+    raise dns.resolver.NXDOMAIN(qnames=[from_e164(number, d) for d in domains])

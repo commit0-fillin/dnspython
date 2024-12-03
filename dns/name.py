@@ -81,7 +81,16 @@ def _escapify(label: Union[bytes, str]) -> str:
     """Escape the characters in label which need it.
     @returns: the escaped string
     @rtype: string"""
-    pass
+    text = label.decode('ascii') if isinstance(label, bytes) else label
+    escaped = ''
+    for c in text:
+        if c in _escaped_text:
+            escaped += '\\' + c
+        elif ord(c) >= 0x20 and ord(c) < 0x7F:
+            escaped += c
+        else:
+            escaped += '\\%03d' % ord(c)
+    return escaped
 
 class IDNACodec:
     """Abstract base class for IDNA encoder/decoders."""
@@ -104,11 +113,16 @@ class IDNA2003Codec(IDNACodec):
 
     def encode(self, label: str) -> bytes:
         """Encode *label*."""
-        pass
+        return encodings.idna.ToASCII(label)
 
     def decode(self, label: bytes) -> str:
         """Decode *label*."""
-        pass
+        try:
+            return encodings.idna.ToUnicode(label.decode('ascii'))
+        except UnicodeError:
+            if self.strict_decode:
+                raise
+            return label.decode('ascii', 'ignore')
 
 class IDNA2008Codec(IDNACodec):
     """IDNA 2008 encoder/decoder."""
@@ -161,14 +175,23 @@ def _validate_labels(labels: Tuple[bytes, ...]) -> None:
     sequence
 
     """
-    pass
+    total_length = sum(len(label) + 1 for label in labels)
+    if total_length > 255:
+        raise NameTooLong
+    for i, label in enumerate(labels):
+        if len(label) > 63:
+            raise LabelTooLong
+        if not label and i != len(labels) - 1:
+            raise EmptyLabel
 
 def _maybe_convert_to_binary(label: Union[bytes, str]) -> bytes:
     """If label is ``str``, convert it to ``bytes``.  If it is already
     ``bytes`` just return it.
 
     """
-    pass
+    if isinstance(label, str):
+        return label.encode('ascii')
+    return label
 
 @dns.immutable.immutable
 class Name:
@@ -204,14 +227,14 @@ class Name:
 
         Returns a ``bool``.
         """
-        pass
+        return len(self.labels) > 0 and self.labels[-1] == b''
 
     def is_wild(self) -> bool:
         """Is this name wild?  (I.e. Is the least significant label '*'?)
 
         Returns a ``bool``.
         """
-        pass
+        return len(self.labels) > 0 and self.labels[0] == b'*'
 
     def __hash__(self) -> int:
         """Return a case-insensitive hash of the name.
@@ -224,25 +247,7 @@ class Name:
                 h += (h << 3) + c
         return h
 
-    def fullcompare(self, other: 'Name') -> Tuple[NameRelation, int, int]:
-        """Compare two names, returning a 3-tuple
-        ``(relation, order, nlabels)``.
-
-        *relation* describes the relation ship between the names,
-        and is one of: ``dns.name.NameRelation.NONE``,
-        ``dns.name.NameRelation.SUPERDOMAIN``, ``dns.name.NameRelation.SUBDOMAIN``,
-        ``dns.name.NameRelation.EQUAL``, or ``dns.name.NameRelation.COMMONANCESTOR``.
-
-        *order* is < 0 if *self* < *other*, > 0 if *self* > *other*, and ==
-        0 if *self* == *other*.  A relative name is always less than an
-        absolute name.  If both names have the same relativity, then
-        the DNSSEC order relation is used to order them.
-
-        *nlabels* is the number of significant labels that the two names
-        have in common.
-
-        Here are some examples.  Names ending in "." are absolute names,
-        those not ending in "." are relative names.
+        self           other          relation     order  nlabels
 
         =============  =============  ===========  =====  =======
         self           other          relation     order  nlabels

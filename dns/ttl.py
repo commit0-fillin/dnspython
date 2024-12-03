@@ -17,4 +17,40 @@ def from_text(text: str) -> int:
 
     Returns an ``int``.
     """
-    pass
+    if not text:
+        raise BadTTL("TTL value cannot be empty")
+
+    total_seconds = 0
+    value = ""
+    for char in text:
+        if char.isdigit():
+            value += char
+        elif char.isalpha():
+            if not value:
+                raise BadTTL(f"Invalid TTL syntax: {text}")
+            
+            seconds = int(value)
+            value = ""
+            
+            if char == 'w':
+                total_seconds += seconds * 7 * 24 * 3600
+            elif char == 'd':
+                total_seconds += seconds * 24 * 3600
+            elif char == 'h':
+                total_seconds += seconds * 3600
+            elif char == 'm':
+                total_seconds += seconds * 60
+            elif char == 's':
+                total_seconds += seconds
+            else:
+                raise BadTTL(f"Invalid unit in TTL: {char}")
+        else:
+            raise BadTTL(f"Invalid character in TTL: {char}")
+
+    if value:
+        total_seconds += int(value)
+
+    if total_seconds > MAX_TTL:
+        raise BadTTL(f"TTL value {total_seconds} exceeds maximum allowed value of {MAX_TTL}")
+
+    return total_seconds

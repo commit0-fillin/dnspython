@@ -45,9 +45,9 @@ class LOC(dns.rdata.Rdata):
     @property
     def float_latitude(self):
         """latitude as a floating point value"""
-        pass
+        return self.latitude[0] + self.latitude[1] / 60.0 + (self.latitude[2] + self.latitude[3] / 1000.0) / 3600.0
 
     @property
     def float_longitude(self):
         """longitude as a floating point value"""
-        pass
+        return self.longitude[0] + self.longitude[1] / 60.0 + (self.longitude[2] + self.longitude[3] / 1000.0) / 3600.0

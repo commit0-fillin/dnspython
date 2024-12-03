@@ -38,7 +38,11 @@ async def send_udp(sock: dns.asyncbackend.DatagramSocket, what: Union[dns.messag
 
     Returns an ``(int, float)`` tuple of bytes sent and the sent time.
     """
-    pass
+    if isinstance(what, dns.message.Message):
+        what = what.to_wire()
+    sent_time = time.time()
+    n = await sock.sendto(what, destination)
+    return (n, sent_time)
 
 async def receive_udp(sock: dns.asyncbackend.DatagramSocket, destination: Optional[Any]=None, expiration: Optional[float]=None, ignore_unexpected: bool=False, one_rr_per_rrset: bool=False, keyring: Optional[Dict[dns.name.Name, dns.tsig.Key]]=None, request_mac: Optional[bytes]=b'', ignore_trailing: bool=False, raise_on_truncation: bool=False, ignore_errors: bool=False, query: Optional[dns.message.Message]=None) -> Any:
     """Read a DNS message from a UDP socket.
@@ -51,7 +55,22 @@ async def receive_udp(sock: dns.asyncbackend.DatagramSocket, destination: Option
     Returns a ``(dns.message.Message, float, tuple)`` tuple of the received message, the
     received time, and the address where the message arrived from.
     """
-    pass
+    wire, from_address = await sock.recvfrom(65535)
+    received_time = time.time()
+    r = dns.message.from_wire(wire, keyring=keyring, request_mac=request_mac,
+                              one_rr_per_rrset=one_rr_per_rrset,
+                              ignore_trailing=ignore_trailing,
+                              raise_on_truncation=raise_on_truncation,
+                              ignore_errors=ignore_errors)
+    if destination:
+        if not _matches_destination(from_address, destination, sock.family):
+            if ignore_unexpected:
+                return await receive_udp(sock, destination, expiration,
+                                         ignore_unexpected, one_rr_per_rrset,
+                                         keyring, request_mac, ignore_trailing,
+                                         raise_on_truncation, ignore_errors, query)
+            raise dns.exception.FormError("got a response from the wrong server")
+    return (r, received_time, from_address)
 
 async def udp(q: dns.message.Message, where: str, timeout: Optional[float]=None, port: int=53, source: Optional[str]=None, source_port: int=0, ignore_unexpected: bool=False, one_rr_per_rrset: bool=False, ignore_trailing: bool=False, raise_on_truncation: bool=False, sock: Optional[dns.asyncbackend.DatagramSocket]=None, backend: Optional[dns.asyncbackend.Backend]=None, ignore_errors: bool=False) -> dns.message.Message:
     """Return the response obtained after sending a query via UDP.
@@ -67,7 +86,34 @@ async def udp(q: dns.message.Message, where: str, timeout: Optional[float]=None,
     See :py:func:`dns.query.udp()` for the documentation of the other
     parameters, exceptions, and return type of this method.
     """
-    pass
+    wire = q.to_wire()
+    (begin_time, expiration) = _compute_times(timeout)
+    s = None
+    if sock:
+        s = sock
+    else:
+        if backend is None:
+            backend = dns.asyncbackend.get_default_backend()
+        af = dns.inet.af_for_address(where)
+        destination = _lltuple((where, port), af)
+        s = await backend.make_socket(af, socket.SOCK_DGRAM, 0, source, source_port)
+    try:
+        await send_udp(s, wire, destination, expiration)
+        (r, received_time, _) = await receive_udp(s, destination, expiration,
+                                                  ignore_unexpected,
+                                                  one_rr_per_rrset,
+                                                  q.keyring, q.mac,
+                                                  ignore_trailing,
+                                                  raise_on_truncation,
+                                                  ignore_errors,
+                                                  q)
+        r.time = received_time - begin_time
+        if not q.is_response(r):
+            raise BadResponse
+        return r
+    finally:
+        if not sock:
+            await s.close()
 
 async def udp_with_fallback(q: dns.message.Message, where: str, timeout: Optional[float]=None, port: int=53, source: Optional[str]=None, source_port: int=0, ignore_unexpected: bool=False, one_rr_per_rrset: bool=False, ignore_trailing: bool=False, udp_sock: Optional[dns.asyncbackend.DatagramSocket]=None, tcp_sock: Optional[dns.asyncbackend.StreamSocket]=None, backend: Optional[dns.asyncbackend.Backend]=None, ignore_errors: bool=False) -> Tuple[dns.message.Message, bool]:
     """Return the response to the query, trying UDP first and falling back

@@ -18,4 +18,17 @@ class IntEnum(enum.IntEnum):
         Returns an enumeration from the calling class corresponding to the
         value, if one is defined, or an ``int`` otherwise.
         """
-        pass
+        if isinstance(value, str):
+            try:
+                return cls[value.upper()]
+            except KeyError:
+                raise ValueError(f"'{value}' is not a valid {cls.__name__}")
+        elif isinstance(value, int):
+            try:
+                return cls(value)
+            except ValueError:
+                # If the int value doesn't correspond to any enum member,
+                # we return it as is (as per the method description)
+                return value
+        else:
+            raise TypeError(f"Expected str or int, not {type(value).__name__}")

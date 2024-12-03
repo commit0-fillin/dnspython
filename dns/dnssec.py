@@ -39,7 +39,14 @@ def algorithm_from_text(text: str) -> Algorithm:
 
     Returns an ``int``.
     """
-    pass
+    text = text.upper()
+    try:
+        return Algorithm[text]
+    except KeyError:
+        try:
+            return Algorithm(int(text))
+        except ValueError:
+            raise dns.exception.SyntaxError(f"unknown algorithm '{text}'")
 
 def algorithm_to_text(value: Union[Algorithm, int]) -> str:
     """Convert a DNSSEC algorithm value to text
@@ -48,11 +55,26 @@ def algorithm_to_text(value: Union[Algorithm, int]) -> str:
 
     Returns a ``str``, the name of a DNSSEC algorithm.
     """
-    pass
+    try:
+        return Algorithm(value).name
+    except ValueError:
+        return str(value)
 
 def to_timestamp(value: Union[datetime, str, float, int]) -> int:
     """Convert various format to a timestamp"""
-    pass
+    if isinstance(value, datetime):
+        return int(value.timestamp())
+    elif isinstance(value, str):
+        try:
+            return int(datetime.strptime(value, "%Y%m%d%H%M%S").timestamp())
+        except ValueError:
+            return int(float(value))
+    elif isinstance(value, float):
+        return int(value)
+    elif isinstance(value, int):
+        return value
+    else:
+        raise ValueError("Unsupported type for timestamp conversion")
 
 def key_id(key: Union[DNSKEY, CDNSKEY]) -> int:
     """Return the key id (a 16-bit number) for the specified key.
@@ -61,7 +83,14 @@ def key_id(key: Union[DNSKEY, CDNSKEY]) -> int:
 
     Returns an ``int`` between 0 and 65535
     """
-    pass
+    rdata = dns.rdata.from_wire(dns.rdataclass.IN, dns.rdatatype.DNSKEY, key.to_wire())
+    total = 0
+    for i, byte in enumerate(rdata.to_wire()):
+        if i % 2 == 0:
+            total += byte << 8
+        else:
+            total += byte
+    return total & 0xFFFF
 
 class Policy:
 
@@ -109,7 +138,28 @@ def make_ds(name: Union[dns.name.Name, str], key: dns.rdata.Rdata, algorithm: Un
 
     Returns a ``dns.rdtypes.ANY.DS.DS``
     """
-    pass
+    if isinstance(name, str):
+        name = dns.name.from_text(name, origin)
+    if isinstance(algorithm, str):
+        algorithm = DSDigest[algorithm.upper()]
+    
+    if policy is None:
+        policy = default_policy
+    
+    if validating:
+        if policy._deny_validate_ds and algorithm in policy._deny_validate_ds:
+            raise DeniedByPolicy(f"DS digest algorithm {algorithm} denied by policy")
+    else:
+        if policy._deny_create_ds and algorithm in policy._deny_create_ds:
+            raise DeniedByPolicy(f"DS digest algorithm {algorithm} denied by policy")
+    
+    if not isinstance(key, (DNSKEY, CDNSKEY)):
+        raise ValueError("Key must be a DNSKEY or CDNSKEY")
+    
+    key_wire = key.to_wire()
+    digest = _make_hash(algorithm, name.to_wire() + key_wire)
+    
+    return DS(dns.rdataclass.IN, dns.rdatatype.DS, key.key_tag(), key.algorithm, algorithm, digest)
 
 def make_cds(name: Union[dns.name.Name, str], key: dns.rdata.Rdata, algorithm: Union[DSDigest, str], origin: Optional[dns.name.Name]=None) -> CDS:
     """Create a CDS record for a DNSSEC key.
@@ -130,7 +180,8 @@ def make_cds(name: Union[dns.name.Name, str], key: dns.rdata.Rdata, algorithm: U
 
     Returns a ``dns.rdtypes.ANY.DS.CDS``
     """
-    pass
+    ds = make_ds(name, key, algorithm, origin)
+    return CDS(ds.rdclass, dns.rdatatype.CDS, ds.key_tag, ds.algorithm, ds.digest_type, ds.digest)
 
 def _validate_rrsig(rrset: Union[dns.rrset.RRset, Tuple[dns.name.Name, dns.rdataset.Rdataset]], rrsig: RRSIG, keys: Dict[dns.name.Name, Union[dns.node.Node, dns.rdataset.Rdataset]], origin: Optional[dns.name.Name]=None, now: Optional[float]=None, policy: Optional[Policy]=None) -> None:
     """Validate an RRset against a single signature rdata, throwing an

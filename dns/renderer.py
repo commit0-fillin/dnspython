@@ -69,10 +69,23 @@ class Renderer:
         self.compress = {}
         self.section = QUESTION
         self.counts = [0, 0, 0, 0]
-        self.output.write(b'\x00' * 12)
+        self.output.write(b'\x00' * 12)  # Placeholder for header
         self.mac = ''
         self.reserved = 0
         self.was_padded = False
+
+        # Validate input parameters
+        if not isinstance(self.id, int) or not 0 <= self.id <= 65535:
+            raise ValueError("ID must be an integer between 0 and 65535")
+        if not isinstance(self.flags, int) or not 0 <= self.flags <= 65535:
+            raise ValueError("Flags must be an integer between 0 and 65535")
+        if not isinstance(self.max_size, int) or self.max_size <= 0:
+            raise ValueError("Max size must be a positive integer")
+        if origin is not None and not isinstance(origin, dns.name.Name):
+            raise TypeError("Origin must be a dns.name.Name object or None")
+
+        # Initialize compression dictionary with root
+        self.compress[dns.name.root] = 0
 
     def _rollback(self, where):
         """Truncate the output buffer at offset *where*, and remove any

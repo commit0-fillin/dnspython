@@ -8,9 +8,9 @@ class AFSDB(dns.rdtypes.mxbase.UncompressedDowncasingMX):
     @property
     def subtype(self):
         """the AFSDB subtype"""
-        pass
+        return self.preference
 
     @property
     def hostname(self):
         """the AFSDB hostname"""
-        pass
+        return self.exchange

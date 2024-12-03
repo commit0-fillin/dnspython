@@ -15,7 +15,19 @@ class PublicRSA(CryptographyPublicKey):
 
     def encode_key_bytes(self) -> bytes:
         """Encode a public key per RFC 3110, section 2."""
-        pass
+        exponent = self.key.public_numbers().e
+        modulus = self.key.public_numbers().n
+        exponent_len = (exponent.bit_length() + 7) // 8
+        modulus_bytes = modulus.to_bytes((modulus.bit_length() + 7) // 8, byteorder='big')
+        
+        if exponent_len <= 255:
+            return struct.pack('!B', exponent_len) + \
+                   exponent.to_bytes(exponent_len, byteorder='big') + \
+                   modulus_bytes
+        else:
+            return struct.pack('!BH', 0, exponent_len) + \
+                   exponent.to_bytes(exponent_len, byteorder='big') + \
+                   modulus_bytes
 
 class PrivateRSA(CryptographyPrivateKey):
     key: rsa.RSAPrivateKey
@@ -25,7 +37,25 @@ class PrivateRSA(CryptographyPrivateKey):
 
     def sign(self, data: bytes, verify: bool=False) -> bytes:
         """Sign using a private key per RFC 3110, section 3."""
-        pass
+        signature = self.key.sign(
+            data,
+            padding.PKCS1v15(),
+            self.public_cls.chosen_hash
+        )
+        
+        if verify:
+            public_key = self.key.public_key()
+            try:
+                public_key.verify(
+                    signature,
+                    data,
+                    padding.PKCS1v15(),
+                    self.public_cls.chosen_hash
+                )
+            except:
+                raise ValueError("Signature verification failed")
+        
+        return signature
 
 class PublicRSAMD5(PublicRSA):
     algorithm = Algorithm.RSAMD5

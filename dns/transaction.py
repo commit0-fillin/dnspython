@@ -14,7 +14,7 @@ class TransactionManager:
 
     def reader(self) -> 'Transaction':
         """Begin a read-only transaction."""
-        pass
+        return Transaction(self, read_only=True)
 
     def writer(self, replacement: bool=False) -> 'Transaction':
         """Begin a writable transaction.
@@ -24,7 +24,7 @@ class TransactionManager:
         the default, then the content of the transaction updates the
         existing content.
         """
-        pass
+        return Transaction(self, replacement=replacement)
 
     def origin_information(self) -> Tuple[Optional[dns.name.Name], bool, Optional[dns.name.Name]]:
         """Returns a tuple
@@ -49,15 +49,19 @@ class TransactionManager:
         relativity).
 
         """
-        pass
+        absolute_origin = self.get_origin()
+        relativize = self.relativize
+        effective_origin = absolute_origin if not relativize else dns.name.empty
+
+        return (absolute_origin, relativize, effective_origin)
 
     def get_class(self) -> dns.rdataclass.RdataClass:
         """The class of the transaction manager."""
-        pass
+        return self.rdclass
 
     def from_wire_origin(self) -> Optional[dns.name.Name]:
         """Origin to use in from_wire() calls."""
-        pass
+        return self.get_origin()
 
 class DeleteNotExact(dns.exception.DNSException):
     """Existing data did not match data specified by an exact delete."""

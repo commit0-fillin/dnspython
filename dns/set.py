@@ -25,19 +25,21 @@ class Set:
 
     def add(self, item):
         """Add an item to the set."""
-        pass
+        self.items[item] = None
 
     def remove(self, item):
         """Remove an item from the set."""
-        pass
+        del self.items[item]
 
     def discard(self, item):
         """Remove an item from the set if present."""
-        pass
+        self.items.pop(item, None)
 
     def pop(self):
         """Remove an arbitrary item from the set."""
-        pass
+        if not self.items:
+            raise KeyError("pop from an empty set")
+        return self.items.popitem()[0]
 
     def _clone(self) -> 'Set':
         """Make a (shallow) copy of the set.
@@ -51,7 +53,9 @@ class Set:
         return new instances (e.g. union) once, and keep using them in
         subclasses.
         """
-        pass
+        clone = Set()
+        clone.items = self.items.copy()
+        return clone
 
     def __copy__(self):
         """Make a (shallow) copy of the set."""
@@ -59,36 +63,44 @@ class Set:
 
     def copy(self):
         """Make a (shallow) copy of the set."""
-        pass
+        return self._clone()
 
     def union_update(self, other):
         """Update the set, adding any elements from other which are not
         already in the set.
         """
-        pass
+        for item in other:
+            self.add(item)
 
     def intersection_update(self, other):
         """Update the set, removing any elements from other which are not
         in both sets.
         """
-        pass
+        self.items = {item: None for item in self.items if item in other}
 
     def difference_update(self, other):
         """Update the set, removing any elements from other which are in
         the set.
         """
-        pass
+        for item in other:
+            self.discard(item)
 
     def symmetric_difference_update(self, other):
         """Update the set, retaining only elements unique to both sets."""
-        pass
+        for item in other:
+            if item in self.items:
+                del self.items[item]
+            else:
+                self.items[item] = None
 
     def union(self, other):
         """Return a new set which is the union of ``self`` and ``other``.
 
         Returns the same Set type as this set.
         """
-        pass
+        new_set = self._clone()
+        new_set.union_update(other)
+        return new_set
 
     def intersection(self, other):
         """Return a new set which is the intersection of ``self`` and
@@ -96,7 +108,9 @@ class Set:
 
         Returns the same Set type as this set.
         """
-        pass
+        new_set = self._clone()
+        new_set.intersection_update(other)
+        return new_set
 
     def difference(self, other):
         """Return a new set which ``self`` - ``other``, i.e. the items
@@ -104,7 +118,9 @@ class Set:
 
         Returns the same Set type as this set.
         """
-        pass
+        new_set = self._clone()
+        new_set.difference_update(other)
+        return new_set
 
     def symmetric_difference(self, other):
         """Return a new set which (``self`` - ``other``) | (``other``
@@ -113,7 +129,9 @@ class Set:
 
         Returns the same Set type as this set.
         """
-        pass
+        new_set = self._clone()
+        new_set.symmetric_difference_update(other)
+        return new_set
 
     def __or__(self, other):
         return self.union(other)
@@ -157,11 +175,12 @@ class Set:
         *other*, the collection of items with which to update the set, which
         may be any iterable type.
         """
-        pass
+        for item in other:
+            self.add(item)
 
     def clear(self):
         """Make the set empty."""
-        pass
+        self.items.clear()
 
     def __eq__(self, other):
         return self.items == other.items
@@ -193,11 +212,11 @@ class Set:
 
         Returns a ``bool``.
         """
-        pass
+        return all(item in other for item in self.items)
 
     def issuperset(self, other):
         """Is this set a superset of *other*?
 
         Returns a ``bool``.
         """
-        pass
+        return all(item in self.items for item in other)

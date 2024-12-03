@@ -105,14 +105,52 @@ def _digest(wire, key, rdata, time=None, request_mac=None, ctx=None, multi=None)
     @raises ValueError: I{other_data} is too long
     @raises NotImplementedError: I{algorithm} is not supported
     """
-    pass
+    if isinstance(key, GSSTSig):
+        if ctx is None:
+            ctx = GSSTSig(key.gssapi_context)
+        ctx.data += wire
+        return ctx
+    
+    if ctx is None:
+        ctx = get_context(key)
+    
+    ctx.hmac_context.update(wire)
+    
+    if rdata is not None:
+        if isinstance(time, int):
+            time = struct.pack("!I", time)
+        ctx.hmac_context.update(key.name.to_digestable())
+        ctx.hmac_context.update(struct.pack("!H", dns.rdataclass.ANY))
+        ctx.hmac_context.update(struct.pack("!I", 0))
+        ctx.hmac_context.update(time)
+        ctx.hmac_context.update(struct.pack("!H", rdata.fudge))
+        ctx.hmac_context.update(struct.pack("!H", rdata.mac_size))
+        ctx.hmac_context.update(rdata.mac)
+        ctx.hmac_context.update(struct.pack("!H", dns.rdataclass.ANY))
+        ctx.hmac_context.update(struct.pack("!I", rdata.original_id))
+        ctx.hmac_context.update(struct.pack("!H", rdata.error))
+        ctx.hmac_context.update(struct.pack("!H", len(rdata.other)))
+        ctx.hmac_context.update(rdata.other)
+    
+    if request_mac is not None:
+        ctx.hmac_context.update(request_mac)
+    
+    return ctx
 
 def _maybe_start_digest(key, mac, multi):
     """If this is the first message in a multi-message sequence,
     start a new context.
     @rtype: dns.tsig.HMACTSig or dns.tsig.GSSTSig object
     """
-    pass
+    if multi:
+        return None
+    if isinstance(key, GSSTSig):
+        ctx = GSSTSig(key.gssapi_context)
+    else:
+        ctx = get_context(key)
+    if mac:
+        ctx.hmac_context.update(mac)
+    return ctx
 
 def sign(wire, key, rdata, time=None, request_mac=None, ctx=None, multi=False):
     """Return a (tsig_rdata, mac, ctx) tuple containing the HMAC TSIG rdata
@@ -122,7 +160,17 @@ def sign(wire, key, rdata, time=None, request_mac=None, ctx=None, multi=False):
     @raises ValueError: I{other_data} is too long
     @raises NotImplementedError: I{algorithm} is not supported
     """
-    pass
+    ctx = _digest(wire, key, rdata, time, request_mac, ctx, multi)
+    
+    if isinstance(key, GSSTSig):
+        mac = ctx.gssapi_context.sign(ctx.data)
+    else:
+        mac = ctx.hmac_context.digest()
+        if ctx.size:
+            mac = mac[:ctx.size]
+    
+    rdata = rdata.replace(mac=mac)
+    return (rdata, mac, ctx)
 
 def validate(wire, key, owner, rdata, now, request_mac, tsig_start, ctx=None, multi=False):
     """Validate the specified TSIG rdata against the other input parameters.
@@ -132,7 +180,34 @@ def validate(wire, key, owner, rdata, now, request_mac, tsig_start, ctx=None, mu
     server.
     @raises BadSignature: The TSIG signature did not validate
     @rtype: dns.tsig.HMACTSig or dns.tsig.GSSTSig object"""
-    pass
+    if isinstance(key, GSSTSig):
+        if ctx is None:
+            ctx = GSSTSig(key.gssapi_context)
+        ctx.data += wire[:tsig_start]
+        try:
+            ctx.gssapi_context.verify(ctx.data, rdata.mac)
+        except Exception:
+            raise BadSignature
+        return ctx
+    
+    if rdata.algorithm != key.algorithm:
+        raise BadAlgorithm
+    
+    time_low = now - rdata.fudge
+    time_high = now + rdata.fudge
+    if rdata.time < time_low or rdata.time > time_high:
+        raise BadTime
+    
+    ctx = _digest(wire[:tsig_start], key, rdata, rdata.time, request_mac, ctx, multi)
+    
+    mac = ctx.hmac_context.digest()
+    if ctx.size:
+        mac = mac[:ctx.size]
+    
+    if mac != rdata.mac:
+        raise BadSignature
+    
+    return ctx
 
 def get_context(key):
     """Returns an HMAC context for the specified key.
@@ -140,7 +215,21 @@ def get_context(key):
     @rtype: HMAC context
     @raises NotImplementedError: I{algorithm} is not supported
     """
-    pass
+    if isinstance(key, GSSTSig):
+        return GSSTSig(key.gssapi_context)
+    
+    try:
+        hashinfo = HMACTSig._hashes[key.algorithm]
+    except KeyError:
+        raise NotImplementedError(f'TSIG algorithm {key.algorithm} is not supported')
+    
+    if isinstance(hashinfo, tuple):
+        ctx = HMACTSig(key.secret, key.algorithm)
+        ctx.size = hashinfo[1]
+    else:
+        ctx = HMACTSig(key.secret, key.algorithm)
+    
+    return ctx
 
 class Key:
 

@@ -36,14 +36,14 @@ class GPOS(dns.rdata.Rdata):
     @property
     def float_latitude(self):
         """latitude as a floating point value"""
-        pass
+        return float(self.latitude.decode())
 
     @property
     def float_longitude(self):
         """longitude as a floating point value"""
-        pass
+        return float(self.longitude.decode())
 
     @property
     def float_altitude(self):
         """altitude as a floating point value"""
-        pass
+        return float(self.altitude.decode())

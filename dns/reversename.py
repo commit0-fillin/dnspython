@@ -25,7 +25,19 @@ def from_address(text: str, v4_origin: dns.name.Name=ipv4_reverse_domain, v6_ori
 
     Returns a ``dns.name.Name``.
     """
-    pass
+    try:
+        # Try parsing as IPv4
+        parts = dns.ipv4.inet_aton(text)
+        labels = [dns.name.from_text(str(byte)) for byte in reversed(parts)]
+        return dns.name.Name(labels + list(v4_origin.labels))
+    except dns.exception.SyntaxError:
+        try:
+            # Try parsing as IPv6
+            parts = dns.ipv6.inet_aton(text)
+            labels = [dns.name.from_text(f"{x:x}") for x in reversed(parts)]
+            return dns.name.Name(labels + list(v6_origin.labels))
+        except dns.exception.SyntaxError:
+            raise dns.exception.SyntaxError(f"Invalid IP address: {text}")
 
 def to_address(name: dns.name.Name, v4_origin: dns.name.Name=ipv4_reverse_domain, v6_origin: dns.name.Name=ipv6_reverse_domain) -> str:
     """Convert a reverse map domain name into textual address form.
@@ -44,4 +56,20 @@ def to_address(name: dns.name.Name, v4_origin: dns.name.Name=ipv4_reverse_domain
 
     Returns a ``str``.
     """
-    pass
+    labels = list(name.labels)
+    
+    if name.is_subdomain(v4_origin):
+        # IPv4 address
+        labels = labels[:-len(v4_origin.labels)]
+        if len(labels) != 4:
+            raise dns.exception.SyntaxError("Invalid IPv4 reverse-map name")
+        return '.'.join(str(int(label.decode())) for label in reversed(labels))
+    elif name.is_subdomain(v6_origin):
+        # IPv6 address
+        labels = labels[:-len(v6_origin.labels)]
+        if len(labels) != 32:
+            raise dns.exception.SyntaxError("Invalid IPv6 reverse-map name")
+        hex_parts = [''.join(reversed([label.decode() for label in labels[i:i+4]])) for i in range(0, 32, 4)]
+        return ':'.join(hex_parts)
+    else:
+        raise dns.exception.SyntaxError("Name is not a reverse-map address")
